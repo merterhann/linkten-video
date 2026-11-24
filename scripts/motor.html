@@ -1,0 +1,315 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:OB;src:url("fonts/Outfit-Bold.ttf")}
+@font-face{font-family:OK;src:url("fonts/Outfit-Black.ttf")}
+@font-face{font-family:OM;src:url("fonts/Outfit-Medium.ttf")}
+html,body{margin:0;background:#070c0a}
+canvas{display:block}
+</style></head>
+<body><canvas id="c" width="1080" height="1920"></canvas>
+<script>
+// Linkten Video motoru: her kare draw(t) ile sıfırdan çizilir (zaman → görüntü).
+const W=1080,H=1920,CX=540,CY=900;
+const C=document.getElementById('c'),X=C.getContext('2d');
+let R={zemin1:'#13261D',zemin2:'#0B1711',zemin3:'#050907',yazi:'#EFE9DD',vurgu:'#F2B35B',sakin:'#7FC8A0',gergin:'#E0786A'};
+const DIM=()=>hexa(R.yazi,0.32);
+let WORDS=[],CHUNKS=[],SC=[],SURE=60;
+window.OZEL=window.OZEL||{};
+
+// ---------- yardımcılar ----------
+const cl=(v,a=0,b=1)=>Math.max(a,Math.min(b,v));
+const lin=(t,a,b)=>b===a?(t>=a?1:0):cl((t-a)/(b-a));
+const eo=x=>1-Math.pow(1-x,3);
+const eio=x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;
+const back=x=>{const c1=1.70158,c3=c1+1;return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2)};
+function hex(c){return [parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)]}
+function hexa(c,a){const h=hex(c);return `rgba(${h[0]},${h[1]},${h[2]},${a})`}
+function mix(a,b,m){const A=hex(a),B=hex(b);return `rgb(${A.map((v,i)=>Math.round(v+(B[i]-v)*m)).join(',')})`}
+function rnd(i){const x=Math.sin(i*12.9898)*43758.5453;return x-Math.floor(x)}
+function stroke(col,w){X.strokeStyle=col;X.lineWidth=w;X.lineCap='round';X.lineJoin='round'}
+function label(txt,x,y,size,col,a=1,fam='OM'){if(a<=0||!txt)return;X.save();X.globalAlpha*=a;X.font=`${size}px ${fam}`;X.fillStyle=col;X.textAlign='center';X.textBaseline='middle';X.fillText(txt,x,y);X.restore()}
+function fitFont(txt,fam,size,maxW){X.font=`${size}px ${fam}`;const w=X.measureText(txt).width;if(w>maxW){size=size*maxW/w;X.font=`${size}px ${fam}`}return size}
+function pill(txt,x,y,a,col){X.save();X.globalAlpha*=a;const s=fitFont(txt,'OB',58,760);const tw=X.measureText(txt).width;const pw=tw+90,ph=s+52;
+  X.beginPath();X.roundRect(x-pw/2,y-ph/2,pw,ph,ph/2);stroke(col,5);X.stroke();
+  X.fillStyle=col;X.textAlign='center';X.textBaseline='middle';X.fillText(txt,x,y+3);X.restore();return pw}
+// "*vurgu*" işaretli metni satırlara böler: [[{w,v}]]
+function wrapMarked(txt,fam,size,maxW){
+  X.font=`${size}px ${fam}`;const toks=[];let v=false;
+  txt.split(/\s+/).filter(Boolean).forEach(w=>{let on=v;if(w.startsWith('*')){on=true;w=w.slice(1)}let close=false;if(w.endsWith('*')){close=true;w=w.slice(0,-1)}
+    toks.push({w,v:on});v=on&&!close});
+  const lines=[[]];let cw=0;const sp=X.measureText(' ').width;
+  toks.forEach(t=>{const ww=X.measureText(t.w).width;if(lines.at(-1).length&&cw+sp+ww>maxW){lines.push([]);cw=0}
+    cw+=(lines.at(-1).length?sp:0)+ww;lines.at(-1).push(t)});
+  return lines;
+}
+const ZAMAN=(o,k,d)=>typeof o[k]==='number'?o[k]:d;
+
+// ---------- zemin ----------
+let GRAIN=null;
+function makeGrain(){GRAIN=document.createElement('canvas');GRAIN.width=270;GRAIN.height=480;const x=GRAIN.getContext('2d');const d=x.createImageData(270,480);
+  for(let i=0;i<d.data.length;i+=4){const v=rnd(i*0.37)*255;d.data[i]=d.data[i+1]=d.data[i+2]=v;d.data[i+3]=10}x.putImageData(d,0,0)}
+function bg(t){
+  const g=X.createRadialGradient(CX,820,80,CX,900,1250);
+  g.addColorStop(0,R.zemin1);g.addColorStop(.55,R.zemin2);g.addColorStop(1,R.zemin3);
+  X.fillStyle=g;X.fillRect(0,0,W,H);
+  const lx=CX+Math.sin(t*0.25)*180,ly=760+Math.cos(t*0.18)*120;
+  const g2=X.createRadialGradient(lx,ly,0,lx,ly,520);
+  g2.addColorStop(0,hexa(R.sakin,0.07));g2.addColorStop(1,hexa(R.sakin,0));
+  X.fillStyle=g2;X.fillRect(0,0,W,H);
+}
+
+// ---------- sahne geçişi ----------
+const FI=0.35,FO=0.3;
+function sceneA(sc,t){return Math.min(sc.bas<=0.01?1:eo(lin(t,sc.bas-0.1,sc.bas+FI)),1-eio(lin(t,sc.bit-0.1,sc.bit+FO)))}
+
+// ---------- üstteki dev kelime ----------
+function keyword(t){
+  for(const sc of SC){
+    const k=sc.kelime||[];
+    for(let i=0;i<k.length;i++){
+      const [ks,txt]=k[i];const ke=i+1<k.length?k[i+1][0]:sc.bit;
+      const ain=ks<=0.01?1:eo(lin(t,ks+0.02,ks+0.4)), aout=1-eio(lin(t,ke-0.22,ke));
+      const a=Math.min(ain,aout);if(a<=0.001)continue;
+      X.save();X.globalAlpha=a;fitFont(txt,'OK',150,940);
+      X.textAlign='center';X.textBaseline='alphabetic';
+      const y=470+(1-ain)*40-(1-aout)*30;
+      X.fillStyle=R.yazi;X.fillText(txt,CX,y);
+      const lw=120*eo(lin(t,ks+0.15,ks+0.6))*aout;
+      X.fillStyle=R.vurgu;X.fillRect(CX-lw/2,y+34,lw,6);
+      X.restore();
+    }
+  }
+}
+
+// ---------- altyazı (kelime kelime yanar) ----------
+function buildChunks(){
+  X.font='74px OB';CHUNKS=[];
+  let cur=[],cw=0;const space=X.measureText(' ').width;
+  for(let i=0;i<WORDS.length;i++){
+    const ww=X.measureText(WORDS[i].w).width;
+    if(cur.length&&(cw+space+ww>860||cur.length>=3)){CHUNKS.push(cur);cur=[];cw=0}
+    cur.push(i);cw+=(cur.length>1?space:0)+ww;
+    if(/[.?!…]$/.test(WORDS[i].w)){CHUNKS.push(cur);cur=[];cw=0}
+  }
+  if(cur.length)CHUNKS.push(cur);
+  CHUNKS=CHUNKS.map(c=>({ids:c,s:WORDS[c[0]].s-0.08,e:0}));
+  for(let i=0;i<CHUNKS.length;i++){const last=WORDS[CHUNKS[i].ids.at(-1)];
+    CHUNKS[i].e=i+1<CHUNKS.length?Math.min(CHUNKS[i+1].s-0.01,last.e+0.6):last.e+1.2}
+}
+function subtitles(t){
+  for(const sc of SC){if(sc.tur==='soru'&&t>=sc.bas-0.05&&t<sc.bit)return}
+  for(const ch of CHUNKS){
+    if(t<ch.s||t>=ch.e)continue;
+    X.save();X.font='74px OB';X.textBaseline='alphabetic';X.textAlign='left';
+    const space=X.measureText(' ').width;
+    const ws=ch.ids.map(i=>WORDS[i]);const widths=ws.map(w=>X.measureText(w.w).width);
+    const tot=widths.reduce((a,b)=>a+b,0)+space*(ws.length-1);
+    let x=CX-tot/2;const y=1490;const aout=1-lin(t,ch.e-0.1,ch.e);
+    ws.forEach((w,i)=>{
+      const p=eo(lin(t,w.s-0.08,w.s+0.14));
+      const active=t>=w.s-0.04&&t<w.e+0.02;
+      X.globalAlpha=cl(0.35+0.65*p)*aout;
+      X.fillStyle=active?R.vurgu:(p>0.99?R.yazi:DIM());
+      X.shadowColor='rgba(0,0,0,0.55)';X.shadowBlur=18;X.shadowOffsetY=4;
+      X.fillText(w.w,x,y+(1-p)*14);x+=widths[i]+space;
+    });
+    X.restore();
+  }
+}
+
+// ================= SAHNE KÜTÜPHANESİ =================
+// Her tür: f(t, a, sc) — t: saniye, a: sahnenin görünürlüğü (0-1), sc.ayar: ayarlar.
+const TUR={};
+
+// dalga: dağınık, gergin çizgi "sakinles" anında yumuşak dalgaya döner
+TUR.dalga=(t,a,sc)=>{
+  const o=sc.ayar||{};const sk=ZAMAN(o,'sakinles',(sc.bas+sc.bit)/2);
+  const draw=eo(lin(t,sc.bas,sc.bas+1.4));const m=eio(lin(t,sk-0.8,sk+1.2));
+  const N=220;X.save();X.globalAlpha=a;X.beginPath();
+  for(let i=0;i<=N*draw;i++){const u=i/N,x=CX-400+800*u;
+    const chaos=150*(Math.sin(i*0.9+t*7)*Math.cos(i*0.37-t*5))+110*(rnd(i+Math.floor(t*12)*0.1)-0.5);
+    const calm=70*Math.sin(u*Math.PI*3+t*1.6);const y=CY+(1-m)*chaos+m*calm;i?X.lineTo(x,y):X.moveTo(x,y)}
+  const col=mix(R.gergin,R.sakin,m);stroke(col,7);X.shadowColor=col;X.shadowBlur=20;X.stroke();X.restore();
+};
+
+// karsitlik: üstte A, altta B, aradan ok; "ciz" anında B'nin üstü çizilir; "degis" anında yer değiştirirler
+TUR.karsitlik=(t,a,sc)=>{
+  const o=sc.ayar||{};const b0=sc.bas;
+  const okAn=ZAMAN(o,'ok',b0+0.9),ciz=ZAMAN(o,'ciz',-1),degis=ZAMAN(o,'degis',-1),ciz2=ZAMAN(o,'ciz2',-1);
+  X.save();X.globalAlpha=a;
+  const sw=degis>0?eio(lin(t,degis,degis+0.9)):0;
+  const yTop=720,yBot=1100;const yA=yTop+(yBot-yTop)*sw,yB=yBot-(yBot-yTop)*sw;
+  const pa=eo(lin(t,b0+0.2,b0+0.6)),pb=eo(lin(t,okAn-0.1,okAn+0.3));
+  const ar=eo(lin(t,okAn,okAn+0.6));
+  X.save();stroke(R.yazi,6);X.globalAlpha*=0.8;const y0=yTop+75,y1=yBot-75,yy=y0+(y1-y0)*ar;
+  X.beginPath();X.moveTo(CX,y0);X.lineTo(CX,yy);X.stroke();
+  if(ar>0.9){X.beginPath();X.moveTo(CX-26,yy-30);X.lineTo(CX,yy);X.lineTo(CX+26,yy-30);X.stroke()}X.restore();
+  const kB=ciz>0?eo(lin(t,ciz,ciz+0.5))*(degis>0?1-lin(t,degis-0.2,degis+0.1):1):0;
+  const kA=ciz2>0?eo(lin(t,ciz2,ciz2+0.5)):0;
+  const wA=pill(o.ust||'',CX,yA,pa,kA>0.5?'#8a837a':R.gergin);
+  const wB=pill(o.alt||'',CX,yB,pb,kB>0.5?'#8a837a':R.vurgu);
+  if(kB>0){X.save();stroke(R.gergin,7);X.beginPath();X.moveTo(CX-wB/2-10,yB);X.lineTo(CX-wB/2-10+(wB+20)*kB,yB);X.stroke();X.restore()}
+  if(kA>0){X.save();stroke(R.sakin,7);X.beginPath();X.moveTo(CX-wA/2-10,yA);X.lineTo(CX-wA/2-10+(wA+20)*kA,yA);X.stroke();X.restore()}
+  X.restore();
+};
+
+// yutma: titreyen küçük nokta ("kucuk"), "an" anında büyüyen çember ("buyuk") tarafından yutulur
+TUR.yutma=(t,a,sc)=>{
+  const o=sc.ayar||{};const an=ZAMAN(o,'an',sc.bas+0.8);
+  X.save();X.globalAlpha=a;const g=eo(lin(t,an-0.1,an+0.8));
+  const jx=(1-g)*12*Math.sin(t*41),jy=(1-g)*12*Math.cos(t*37);const Rr=60+230*g;
+  X.beginPath();X.arc(CX,CY,Rr,0,Math.PI*2);X.fillStyle=hexa(R.vurgu,0.12+0.18*g);X.fill();stroke(R.vurgu,6);X.stroke();
+  X.beginPath();X.arc(CX+jx+(1-g)*260,CY+jy,34*(1-0.7*g),0,Math.PI*2);X.fillStyle=mix(R.gergin,'#6b5a55',g);X.fill();
+  label(o.kucuk,CX+(1-g)*260,CY+80,40,R.yazi,1-g);
+  label(o.buyuk,CX,CY+Rr+60,44,R.vurgu,g);X.restore();
+};
+
+// liste: maddeler sırayla tik alarak gelir. ayar.maddeler: [[an,"metin"],...] (en çok 4)
+TUR.liste=(t,a,sc)=>{
+  const o=sc.ayar||{};const M=(o.maddeler||[]).slice(0,4);
+  X.save();X.globalAlpha=a;const d=eo(lin(t,sc.bas,sc.bas+0.5));
+  const hgt=80+M.length*120;const top=CY-hgt/2;
+  X.save();X.globalAlpha*=d;X.beginPath();X.roundRect(CX-400,top,800,hgt,40);X.fillStyle=hexa(R.yazi,0.05);X.fill();stroke(hexa(R.yazi,0.35),4);X.stroke();X.restore();
+  M.forEach(([an,txt],i)=>{const p=eo(lin(t,an-0.15,an+0.3));if(p<=0)return;
+    const y=top+100+i*120;X.save();X.globalAlpha*=p;
+    X.beginPath();X.arc(CX-320,y,30,0,Math.PI*2);X.fillStyle=R.vurgu;X.fill();
+    stroke('#1a1a1a',7);X.beginPath();X.moveTo(CX-334,y);X.lineTo(CX-323,y+11);X.lineTo(CX-303,y-12);X.stroke();
+    X.font='54px OB';X.fillStyle=R.yazi;X.textAlign='left';X.textBaseline='middle';
+    fitFont(txt,'OB',54,600);X.fillText(txt,CX-260+(1-p)*30,y+2);X.restore()});
+  X.restore();
+};
+
+// halkalar: merkezden yayılan dalgalar; ayar.yazi alt yazı, ayar.yazi_an görünme anı
+TUR.halkalar=(t,a,sc)=>{
+  const o=sc.ayar||{};X.save();X.globalAlpha=a;
+  for(let k=0;k<4;k++){const ph=((t-sc.bas)*0.55+k/4)%1;
+    X.save();X.globalAlpha*=(1-ph)*0.8;stroke(R.sakin,5);X.beginPath();X.arc(CX,CY,60+ph*330,0,Math.PI*2);X.stroke();X.restore()}
+  X.beginPath();X.arc(CX,CY,58*(1+0.08*Math.sin(t*5))*eo(lin(t,sc.bas,sc.bas+0.4)),0,Math.PI*2);X.fillStyle=R.vurgu;X.fill();
+  label(o.yazi,CX,CY+440,46,R.yazi,eo(lin(t,ZAMAN(o,'yazi_an',sc.bas+0.5),ZAMAN(o,'yazi_an',sc.bas+0.5)+0.4)));X.restore();
+};
+
+// dongu: kesik çizgili dönen çember (ayar.yazi içinde); "kacis" anında nokta döngüden kopup çıkar
+TUR.dongu=(t,a,sc)=>{
+  const o=sc.ayar||{};const kc=ZAMAN(o,'kacis',sc.bit-1);
+  X.save();X.globalAlpha=a;const Rr=230;const esc=lin(t,kc,kc+0.8);const d=eo(lin(t,sc.bas,sc.bas+0.6));
+  X.save();X.globalAlpha*=(1-0.6*eo(esc));stroke(R.gergin,6);X.setLineDash([26,22]);X.lineDashOffset=-t*90*(1-esc*0.8);
+  X.beginPath();X.arc(CX,CY,Rr,0,Math.PI*2*d);X.stroke();X.setLineDash([]);
+  label(o.yazi,CX,CY,46,hexa(R.yazi,0.8),d*(1-eo(esc)));X.restore();
+  const A=tt=>-Math.PI/2+(tt-sc.bas)*2.4;let x,y;
+  if(t<kc){x=CX+Rr*Math.cos(A(t));y=CY+Rr*Math.sin(A(t))}
+  else{const e=eo(esc),a0=A(kc);const px=CX+Rr*Math.cos(a0),py=CY+Rr*Math.sin(a0);
+    x=px-Math.sin(a0)*e*500;y=py+Math.cos(a0)*e*500-e*120}
+  X.beginPath();X.arc(x,y,26,0,Math.PI*2);X.fillStyle=R.vurgu;X.shadowColor=R.vurgu;X.shadowBlur=30;X.fill();X.restore();
+};
+
+// nabiz: kalp atışı çizgisi. ayar.hiz [baştaki, sondaki] (1 sakin – 3.2 panik), ayar.degisim [başla, bitir] saniye
+const FAZ=new Map();
+function faz(sc,fn,tt){let tab=FAZ.get(sc);if(!tab){tab=[0];for(let i=1;i<=20000;i++)tab.push(tab[i-1]+fn(i*0.01-0.005)*0.01);FAZ.set(sc,tab)}
+  const k=cl(tt/0.01,0,19999),i=Math.floor(k);return tab[i]+(tab[i+1]-tab[i])*(k-i)}
+TUR.nabiz=(t,a,sc)=>{
+  const o=sc.ayar||{};const [h0,h1]=o.hiz||[3.2,3.2];const [d0,d1]=o.degisim||[sc.bas,sc.bit];
+  const fn=tt=>h0+(h1-h0)*eio(lin(tt,d0,d1));const colF=tt=>{const f=fn(tt);return mix(R.sakin,R.gergin,cl((f-1)/2.2))};
+  X.save();X.globalAlpha=a;const N=300;X.beginPath();
+  for(let i=0;i<=N;i++){const u=i/N,x=60+960*u,tt=t-(1-u)*2.2,f=fn(tt),ph=faz(sc,fn,tt)%1;
+    let y=ph<0.12?-Math.sin(ph/0.12*Math.PI)*(ph<0.06?260:-90):6*Math.sin(tt*30)*f/3;
+    y+=10*Math.sin(u*40+t*4)*cl((f-1)/2.2,0.15,1);i?X.lineTo(x,CY+y):X.moveTo(x,CY+y)}
+  const col=colF(t);stroke(col,6);X.shadowColor=col;X.shadowBlur=18;X.stroke();
+  label(o.yazi,CX,CY+330,46,col,eo(lin(t,ZAMAN(o,'yazi_an',sc.bas+0.5),ZAMAN(o,'yazi_an',sc.bas+0.5)+0.4)));X.restore();
+};
+
+// nefes: yavaşça büyüyüp küçülen, parlayan çember ("nefes al / nefes ver")
+TUR.nefes=(t,a,sc)=>{
+  const o=sc.ayar||{};X.save();X.globalAlpha=a;const b=0.5-0.5*Math.cos((t-sc.bas)*Math.PI*2/4.2);const Rr=150+110*b;
+  const g=X.createRadialGradient(CX,CY,0,CX,CY,Rr+120);g.addColorStop(0,hexa(R.sakin,0.30));g.addColorStop(1,hexa(R.sakin,0));
+  X.fillStyle=g;X.beginPath();X.arc(CX,CY,Rr+120,0,Math.PI*2);X.fill();stroke(R.sakin,6);X.beginPath();X.arc(CX,CY,Rr,0,Math.PI*2);X.stroke();
+  label(o.yazi||(b>0.5?'nefes al':'nefes ver'),CX,CY,48,R.yazi,0.85);X.restore();
+};
+
+// soru: sahne aralığındaki konuşma ekranın ortasında dev yazıyla kelime kelime gelir, son satır vurgulu (altyazı gizlenir)
+TUR.soru=(t,a,sc)=>{
+  const ws=WORDS.filter(w=>w.s>=sc.bas-0.05&&w.s<sc.bit);if(!ws.length)return;
+  X.save();X.globalAlpha=a;X.font='130px OK';const sp=X.measureText(' ').width;
+  const lines=[[]];let cw=0;ws.forEach(w=>{const ww=X.measureText(w.w).width;if(lines.at(-1).length&&cw+sp+ww>900){lines.push([]);cw=0}cw+=(lines.at(-1).length?sp:0)+ww;lines.at(-1).push(w)});
+  const y0=CY-((lines.length-1)*160)/2+40;
+  lines.forEach((ln,li)=>{const wd=ln.map(w=>X.measureText(w.w).width);let x=CX-(wd.reduce((p,c)=>p+c,0)+sp*(ln.length-1))/2;
+    ln.forEach((w,i)=>{const p=eo(lin(t,w.s-0.1,w.s+0.2));X.save();X.globalAlpha*=p;X.textAlign='left';
+      X.fillStyle=li===lines.length-1?R.vurgu:R.yazi;X.fillText(w.w,x,y0+li*160+(1-p)*30);X.restore();x+=wd[i]+sp})});
+  X.restore();
+};
+
+// bloklar: ayar.anlar'daki her anda bir blok yerine oturur (en çok 6, piramit);
+// isteğe bağlı ayar.ciz_yazi: "yazi_an"da görünür, "ciz_an"da üstü çizilir
+TUR.bloklar=(t,a,sc)=>{
+  const o=sc.ayar||{};const P=[[0,0],[1,0],[2,0],[0.5,1],[1.5,1],[1,2]];const an=(o.anlar||[]).slice(0,6);
+  X.save();X.globalAlpha=a;const sz=150,gap=14,ox=CX-(3*sz+2*gap)/2,base=CY+170;
+  an.forEach((tb,i)=>{const [c,r]=P[i];const p=back(cl(lin(t,tb-0.05,tb+0.35)));if(p<=0)return;
+    const x=ox+c*(sz+gap),y=base-(r+1)*(sz+gap)-(1-cl(p))*140;
+    X.save();X.globalAlpha*=cl(p*1.5);X.beginPath();X.roundRect(x,y,sz,sz,22);X.fillStyle=r===2?R.vurgu:(r===1?'#CFC5B2':R.yazi);X.fill();X.restore()});
+  if(o.ciz_yazi){const fp=eo(lin(t,ZAMAN(o,'yazi_an',sc.bas+1),ZAMAN(o,'yazi_an',sc.bas+1)+0.4)),ca=ZAMAN(o,'ciz_an',-1),st=ca>0?eo(lin(t,ca,ca+0.5)):0;
+    X.save();X.globalAlpha*=fp;X.font='62px OB';X.textAlign='center';X.textBaseline='middle';X.fillStyle=mix(R.gergin,'#7d776d',st);X.fillText(o.ciz_yazi,CX,CY+300);
+    if(st>0){const w=X.measureText(o.ciz_yazi).width+40;stroke(R.yazi,8);X.beginPath();X.moveTo(CX-w/2,CY+300);X.lineTo(CX-w/2+w*st,CY+300);X.stroke()}X.restore()}
+  X.restore();
+};
+
+// sayi: dev sayaç. ayar: den, e, onek, sonek, an [başla, bitir], yazi (altta)
+TUR.sayi=(t,a,sc)=>{
+  const o=sc.ayar||{};const [a0,a1]=o.an||[sc.bas+0.2,sc.bas+1.5];const d0=o.den??0,d1=o.e??100;
+  const v=d0+(d1-d0)*eo(lin(t,a0,a1));const ondalik=(String(d1).split('.')[1]||'').length;
+  const txt=(o.onek||'')+v.toLocaleString('tr-TR',{minimumFractionDigits:ondalik,maximumFractionDigits:ondalik})+(o.sonek||'');
+  X.save();X.globalAlpha=a;const pop=1+0.06*Math.sin(Math.PI*lin(t,a1-0.1,a1+0.3));
+  X.translate(CX,CY);X.scale(pop,pop);fitFont(txt,'OK',260,900);X.fillStyle=R.vurgu;X.textAlign='center';X.textBaseline='middle';X.fillText(txt,0,0);X.restore();
+  label(o.yazi,CX,CY+210,50,R.yazi,a*eo(lin(t,a1-0.3,a1+0.2)));
+};
+
+// emoji: 1-3 dev emoji, her biri kendi anında zıplayarak gelir. ayar.ogeler: [[an,"🍳","alt yazı"],...]
+TUR.emoji=(t,a,sc)=>{
+  const o=sc.ayar||{};const G=(o.ogeler||[]).slice(0,3);const n=G.length;if(!n)return;
+  const sz=[0,300,230,190][n],gapx=[0,0,420,330][n];
+  X.save();X.globalAlpha=a;
+  G.forEach(([an,em,txt],i)=>{const p=back(cl(lin(t,an-0.1,an+0.35)));if(p<=0)return;
+    const x=CX+(i-(n-1)/2)*gapx,y=CY-20+Math.sin(t*1.8+i)*10;
+    X.save();X.globalAlpha*=cl(p*1.5);X.translate(x,y);X.scale(p,p);X.font=`${sz}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+    X.textAlign='center';X.textBaseline='middle';X.fillText(em,0,0);X.restore();
+    label(txt,x,CY+sz/2+60,n>2?40:46,R.yazi,cl(p))});
+  X.restore();
+};
+
+// metin: ortada dev cümle; *yıldızlı* kelimeler vurgu renginde. ayar.yazi, ayar.an
+TUR.metin=(t,a,sc)=>{
+  const o=sc.ayar||{};const an=ZAMAN(o,'an',sc.bas);if(!o.yazi)return;
+  X.save();X.globalAlpha=a;const lines=wrapMarked(o.yazi,'OK',110,900);X.font='110px OK';const sp=X.measureText(' ').width;
+  const y0=CY-((lines.length-1)*135)/2+35;let k=0;
+  lines.forEach((ln,li)=>{const wd=ln.map(w=>X.measureText(w.w).width);let x=CX-(wd.reduce((p,c)=>p+c,0)+sp*(ln.length-1))/2;
+    ln.forEach((w,i)=>{const p=eo(lin(t,an+k*0.08,an+k*0.08+0.35));k++;X.save();X.globalAlpha*=p;X.textAlign='left';
+      X.fillStyle=w.v?R.vurgu:R.yazi;X.fillText(w.w,x,y0+li*135+(1-p)*30);X.restore();x+=wd[i]+sp})});
+  X.restore();
+};
+
+// ozel: projedeki ozel.js'te tanımlı window.OZEL[ayar.fonksiyon](t, a, sc, ARAC)
+const ARAC={X,W,H,CX,CY,R:()=>R,cl,lin,eo,eio,back,mix,hexa,rnd,stroke,label,fitFont,pill};
+TUR.ozel=(t,a,sc)=>{const f=window.OZEL[(sc.ayar||{}).fonksiyon];if(f){X.save();X.globalAlpha=a;f(t,a,sc,ARAC);X.restore()}};
+
+// ---------- kare ----------
+function draw(t){
+  X.setTransform(1,0,0,1,0,0);X.globalAlpha=1;X.shadowBlur=0;
+  bg(t);
+  for(const sc of SC){const a=sceneA(sc,t);if(a<=0.001)continue;const f=TUR[sc.tur];if(!f)continue;
+    X.save();X.translate(0,(1-a)*30);f(t,a,sc);X.restore();X.shadowBlur=0}
+  keyword(t);subtitles(t);
+  const son=WORDS.length?WORDS.at(-1).e:SURE;
+  X.fillStyle=hexa(R.yazi,0.12);X.fillRect(140,1700,800,6);X.fillStyle=R.vurgu;X.fillRect(140,1700,800*cl(t/son),6);
+  const fade=lin(t,SURE-0.9,SURE);if(fade>0){X.fillStyle=`rgba(5,9,7,${fade})`;X.fillRect(0,0,W,H)}
+  X.save();X.imageSmoothingEnabled=false;X.drawImage(GRAIN,0,0,W,H);X.restore();
+}
+async function init(v){
+  WORDS=v.kelimeler;SC=(v.sahneler.sahneler||v.sahneler).map(s=>({...s}));SURE=v.sure;
+  if(v.sahneler.renkler)R={...R,...v.sahneler.renkler};
+  // son sahne videonun sonuna kadar uzar
+  if(SC.length)SC.at(-1).bit=Math.max(SC.at(-1).bit,SURE+1);
+  await document.fonts.load('74px OB');await document.fonts.load('150px OK');await document.fonts.load('46px OM');
+  makeGrain();buildChunks();
+  const bilinmeyen=SC.filter(s=>!TUR[s.tur]).map(s=>s.tur);
+  return {parca:CHUNKS.length,sahne:SC.length,bilinmeyen};
+}
+</script></body></html>
